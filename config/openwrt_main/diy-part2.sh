@@ -48,6 +48,31 @@ fi
 # Add luci-app-amlogic
 rm -rf package/luci-app-amlogic
 git clone -b main https://github.com/ophub/luci-app-amlogic.git package/luci-app-amlogic
+
+# Add luci-app-openclash (cloned only when the luci feed does not ship it, e.g. openwrt/openwrt)
+rm -rf /tmp/openclash
+if [ -d package/feeds/luci/luci-app-openclash ]; then
+    echo "luci-app-openclash is provided by the luci feed, skip cloning."
+    rm -rf package/luci-app-openclash
+else
+    for i in 1 2 3; do
+        rm -rf /tmp/openclash
+        git clone -q --depth 1 --filter=blob:none --sparse \
+            https://github.com/vernesong/OpenClash.git /tmp/openclash && break
+        echo "Clone luci-app-openclash failed (attempt ${i}), retrying ..."
+        sleep 5
+    done
+    if git -C /tmp/openclash rev-parse --verify HEAD >/dev/null 2>&1; then
+        git -C /tmp/openclash sparse-checkout set luci-app-openclash
+        mkdir -p package/luci-app-openclash
+        cp -a /tmp/openclash/luci-app-openclash/. package/luci-app-openclash/
+        rm -rf /tmp/openclash
+    fi
+    if [ ! -f package/luci-app-openclash/Makefile ]; then
+        echo "ERROR: luci-app-openclash source was not fetched." >&2
+        exit 1
+    fi
+fi
 #
 # Apply patches
 # git apply ../config/patches/{0001*,0002*}.patch --directory=feeds/luci
