@@ -12,7 +12,7 @@ on:
       source_branch:
         description: "Select the source branch"
         required: false
-        default: "all"
+        default: "immortalwrt_master"
         type: choice
         options:
           - all
@@ -22,7 +22,7 @@ on:
       openwrt_board:
         description: "Select device board"
         required: false
-        default: "all"
+        default: "wxy-oect"
         type: choice
         options:
           - all
@@ -334,8 +334,7 @@ on:
         type: choice
         options:
           - ophub
-          - angel
-          - yourname
+          - GitHubActions
 
 env:
   TZ: Etc/UTC

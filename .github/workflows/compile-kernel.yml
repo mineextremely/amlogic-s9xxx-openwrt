@@ -79,11 +79,11 @@ on:
       kernel_sign:
         description: "Set the kernel custom signature"
         required: false
-        default: "-ophub"
+        default: "-GitHubActions"
         type: choice
         options:
           - -ophub
-          - -yourname
+          - -GitHubActions
 
 env:
   TZ: Etc/UTC

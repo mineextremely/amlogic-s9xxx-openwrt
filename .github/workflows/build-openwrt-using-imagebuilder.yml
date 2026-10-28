@@ -15,7 +15,7 @@ on:
       releases_branch:
         description: "Select the releases branch"
         required: false
-        default: "openwrt:25.12.5"
+        default: "immortalwrt:25.12.2"
         type: choice
         options:
           - openwrt:25.12.5
@@ -25,7 +25,7 @@ on:
       openwrt_board:
         description: "Select device board"
         required: false
-        default: "all"
+        default: "wxy-oect"
         type: choice
         options:
           - all
@@ -329,8 +329,7 @@ on:
         type: choice
         options:
           - ophub
-          - angel
-          - yourname
+          - GitHubActions
 
 env:
   TZ: Etc/UTC

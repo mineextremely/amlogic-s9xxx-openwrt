@@ -1,4 +1,5 @@
 !.gitignore
+/GitHubActionsLogs
 /make-openwrt/kernel
 /make-openwrt/u-boot
 /openwrt

@@ -13,7 +13,7 @@ on:
       openwrt_soc:
         description: "Select device board."
         required: false
-        default: "all"
+        default: "s905d"
         type: choice
         options:
           - all
@@ -68,7 +68,7 @@ on:
       openwrt_ip:
         description: "Set OpenWrt default IP address"
         required: false
-        default: "192.168.1.1"
+        default: "192.168.20.1"
       kernel_repo:
         description: "Set the kernel repository"
         required: false
@@ -117,8 +117,7 @@ on:
         type: choice
         options:
           - ophub
-          - angel
-          - yourname
+          - GitHubActions
 
 env:
   TZ: Etc/UTC
