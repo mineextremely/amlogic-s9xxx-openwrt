@@ -1,0 +1,67 @@
+#============================================================================================
+# https://github.com/ophub/amlogic-s9xxx-openwrt
+# Description: Re-dispatch a build that failed at the network gate
+#============================================================================================
+#
+# GitHub-hosted runners are scheduled into random regions, and some of them (observed:
+# westus3) get a constant ~40 kB/s from the Ubuntu mirrors. The "Network speed gate" step
+# in build-openwrt-system-image.yml fails such a job within about a minute, so re-running
+# it is cheap and usually lands on a different region.
+#
+# The retry is surgical: it only fires when the gate step itself failed. A real build
+# failure (broken kernel patch, non-converging make, ...) costs hours per attempt, so it
+# must never be retried automatically.
+#
+# The re-run has to be requested from a *second* workflow: the GitHub API only accepts
+# rerun-failed-jobs once the original run has completed, which it has not yet while the
+# gate step is still running inside it.
+#
+# run_attempt bounds the loop: attempt 1 -> 2 -> 3, then this workflow stays silent.
+
+name: Retry failed build
+
+on:
+  workflow_run:
+    workflows: ["Build OpenWrt system image"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 3 }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_ID: ${{ github.event.workflow_run.run_id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+    steps:
+      - name: Check whether the network gate was the failure
+        id: classify
+        run: |
+          jobs=$(curl -fsSL --max-time 30 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100")
+          gate_failures=$(echo "${jobs}" | jq -r '
+            [ .jobs[] | select(.conclusion == "failure") | .steps[]?
+              | select(.name == "Network speed gate" and .conclusion == "failure") ] | length')
+          echo "network-gate failures: ${gate_failures}"
+          echo "${jobs}" | jq -r '.jobs[] | "  \(.name): \(.conclusion)"'
+          if [ "${gate_failures}" -gt 0 ]; then
+            echo "retry=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "retry=false" >> "${GITHUB_OUTPUT}"
+            echo "Not a network-gate failure - leaving it alone."
+          fi
+
+      - name: Re-run the failed jobs of run ${{ github.event.workflow_run.run_id }}
+        if: ${{ steps.classify.outputs.retry == 'true' }}
+        run: |
+          echo "Run ${RUN_ID} (attempt ${RUN_ATTEMPT}) failed at the network gate - requesting attempt $((RUN_ATTEMPT + 1)) of 3"
+          curl -fsSL --max-time 30 -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/rerun-failed-jobs"
