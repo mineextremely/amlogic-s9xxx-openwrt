@@ -447,16 +447,28 @@ jobs:
           upstream_count=$(echo ${deps_list} | wc -w)
           drop_pattern='^(asciidoc|xmlto|python3-docutils|ecj|fastjar|antlr3|g\+\+-multilib|gcc-multilib|lib32gcc-s1|libc6-dev-i386|aria2|msmtp|nano|vim|lrzsz|irqbalance|haveged|ack)$'
           deps_list=$(printf '%s\n' ${deps_list} | grep -vxE "${drop_pattern}" | tr '\n' ' ')
+          # --no-install-recommends drops libtool-bin, which is where /usr/bin/libtool
+          # actually lives: the "libtool" package alone only ships libtoolize.
+          deps_list="${deps_list} libtool-bin"
           echo "Installing $(echo ${deps_list} | wc -w) of ${upstream_count} packages, without recommends"
           sudo apt-get -y install --no-install-recommends ${deps_list}
           # Fail here rather than three hours into the build if --no-install-recommends
           # dropped something the toolchain needs.
-          for t in gcc g++ make bison flex git python3 ccache rsync unzip zip patch autoconf automake libtool pkg-config swig xxd clang; do
-            command -v "$t" >/dev/null || { echo "::error::missing build tool: ${t}"; exit 1; }
+          missing=""
+          for t in gcc g++ make bison flex git python3 ccache rsync unzip zip patch \
+                   autoconf automake aclocal libtool libtoolize autopoint pkg-config \
+                   swig clang cc cmake ninja scons quilt dtc genisoimage fakeroot \
+                   mksquashfs msgfmt upx 7z zstd xz cpio wget jq gawk sed awk; do
+            command -v "$t" >/dev/null || missing="${missing} ${t}"
           done
           for h in /usr/include/openssl/ssl.h /usr/include/zlib.h /usr/include/ncurses.h /usr/include/elf.h; do
-            [ -f "$h" ] || { echo "::error::missing header: ${h}"; exit 1; }
+            [ -f "$h" ] || missing="${missing} ${h}"
           done
+          if [ -n "${missing}" ]; then
+            echo "::error::missing build prerequisites:${missing}"
+            exit 1
+          fi
+          echo "All build prerequisites present."
           sudo systemctl daemon-reload
           #sudo apt-get -y full-upgrade
           sudo apt-get -y autoremove --purge
