@@ -417,6 +417,12 @@ jobs:
           fi
           echo "APT_MIRROR=${best_host}" >> "${GITHUB_ENV}"
           if [ "${best_host}" != "azure.archive.ubuntu.com" ]; then
+            # The runner image points apt at a mirrorlist file (URIs: mirror+file:...),
+            # so the mirror host names never appear in the sources files: switch the
+            # mirrorlist instead, and fall back to rewriting the sources when there is none.
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              echo "http://${best_host}/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            fi
             for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
               [ -f "$f" ] || continue
               sudo sed -i -E \
@@ -424,6 +430,7 @@ jobs:
                 "$f"
             done
           fi
+          echo "apt mirrorlist: $(cat /etc/apt/apt-mirrors.txt 2>/dev/null || echo '(none)')"
           grep -h '^URIs:' /etc/apt/sources.list.d/*.sources 2>/dev/null | sort -u || true
 
       - name: Initialize the build environment
