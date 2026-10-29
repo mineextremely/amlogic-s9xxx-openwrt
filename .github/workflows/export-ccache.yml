@@ -1,0 +1,172 @@
+#============================================================================================
+# https://github.com/ophub/amlogic-s9xxx-openwrt
+# Description: Export the build ccache snapshot as a downloadable release asset
+#============================================================================================
+#
+# build-openwrt-system-image.yml warms and reuses /builder/openwrt/.ccache through
+# actions/cache, but a GitHub Actions cache can only be read back from *inside* a
+# workflow: the public REST API exposes list/delete, not download. This workflow is
+# the bridge - it restores the very same cache key the build job saves under, packs
+# it into one .tar.zst and publishes it as a release asset, so a local machine can
+# wget it and unpack it into its own topdir.
+#
+# Run it on the same branch the build ran on (caches are branch-scoped: a cache
+# written by a run on "main" is only restoreable from "main" and its PRs).
+#
+# Key matching mirrors the build job:
+#   key:          openwrt-${REPO_NAME}-${source_hash}   (source_hash = head of the source branch)
+#   restore-keys: openwrt-${REPO_NAME}-                 (falls back to the newest cache of that source)
+# When the upstream branch has moved on, the exact key is gone and the prefix hits the
+# newest snapshot instead - which is what you want anyway. The matched key is printed,
+# so the asset name always says which commit the snapshot came from.
+
+name: Export ccache
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: "Source branch name, same values as the build workflow."
+        required: false
+        default: "immortalwrt_master"
+        type: choice
+        options:
+          - openwrt_main
+          - lede_master
+          - immortalwrt_master
+      source_hash:
+        description: "Optional full source commit hash (exact cache key). Empty = current head of the branch."
+        required: false
+        default: ""
+        type: string
+      release_tag:
+        description: "Release tag that holds the exported tarballs."
+        required: false
+        default: "ccache-export"
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  TZ: Etc/UTC
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    # Restoring + recompressing ~1-2 GB of cache: minutes, not hours. The default
+    # 360-minute budget would only hide a hung download.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve source repository and cache key
+        id: src
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          SOURCE_HASH: ${{ inputs.source_hash }}
+        run: |
+          # Same repository mapping as the build workflow, so REPO_NAME (the cache
+          # key prefix) is spelled identically.
+          if [[ "${SOURCE_BRANCH}" =~ ^openwrt ]]; then
+              REPO_URL="https://github.com/openwrt/openwrt"
+          elif [[ "${SOURCE_BRANCH}" =~ ^lede ]]; then
+              REPO_URL="https://github.com/coolsnowwolf/lede"
+          elif [[ "${SOURCE_BRANCH}" =~ ^immortalwrt ]]; then
+              REPO_URL="https://github.com/immortalwrt/immortalwrt"
+          else
+              echo "::error::Unknown source branch: ${SOURCE_BRANCH}"
+              exit 1
+          fi
+          REPO_NAME="${SOURCE_BRANCH%_*}"
+          REPO_BRANCH="${SOURCE_BRANCH##*_}"
+
+          if [[ -n "${SOURCE_HASH}" ]]; then
+              source_hash="${SOURCE_HASH}"
+              echo "Using the commit hash given on the command line: ${source_hash}"
+          else
+              # Identical lookup to the build workflow's "Get OpenWrt source commit
+              # hash" step; a different lookup would silently miss the cache.
+              repo_path="${REPO_URL#https://github.com/}"
+              source_hash=$(curl -fsSL -m 20 \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  "https://api.github.com/repos/${repo_path}/git/ref/heads/${REPO_BRANCH}" |
+                  jq -r '.object.sha')
+              if [[ -z "${source_hash}" || "${source_hash}" == "null" ]]; then
+                  echo "::error::Could not resolve ${repo_path}@${REPO_BRANCH}"
+                  exit 1
+              fi
+          fi
+
+          echo "source: ${REPO_URL} @ ${REPO_BRANCH}"
+          echo "cache key: openwrt-${REPO_NAME}-${source_hash}"
+          echo "repo_name=${REPO_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "source_hash=${source_hash}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare the cache directory
+        run: |
+          # The snapshot holds absolute paths (/builder/openwrt/.ccache/...), so the
+          # directory has to exist and be writable by the runner user.
+          sudo mkdir -p /builder/openwrt
+          sudo chown -R "$(id -u):$(id -g)" /builder
+
+      - name: Restore ccache snapshot
+        id: ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: /builder/openwrt/.ccache
+          key: openwrt-${{ steps.src.outputs.repo_name }}-${{ steps.src.outputs.source_hash }}
+          restore-keys: |
+            openwrt-${{ steps.src.outputs.repo_name }}-
+
+      - name: Inspect what was restored
+        run: |
+          echo "primary key: openwrt-${{ steps.src.outputs.repo_name }}-${{ steps.src.outputs.source_hash }}"
+          echo "matched key: ${{ steps.ccache.outputs.cache-matched-key }}"
+          echo "exact hit:   ${{ steps.ccache.outputs.cache-hit }}"
+          if [[ ! -d /builder/openwrt/.ccache ]]; then
+            echo "::error::Nothing was restored. Caches are branch-scoped - run this workflow on the branch the build ran on, and check the repository's Actions -> Caches tab."
+            exit 1
+          fi
+          sudo apt-get -qq update
+          sudo apt-get -qq -y install ccache zstd
+          # Statistics tell whether the snapshot is a warmed cache or a leftover shell.
+          CCACHE_DIR=/builder/openwrt/.ccache ccache -s || true
+          du -sh /builder/openwrt/.ccache
+
+      - name: Pack the snapshot
+        id: pack
+        run: |
+          tarball="ccache-openwrt-${{ steps.src.outputs.repo_name }}-${{ steps.src.outputs.source_hash }}.tar.zst"
+          # --numeric-owner keeps the runner uid/gid out of the archive; the local
+          # side unpacks with --no-same-owner anyway.
+          tar -I zstd --numeric-owner -cf "/tmp/${tarball}" -C /builder/openwrt .ccache
+          ls -lh "/tmp/${tarball}"
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### ccache snapshot exported"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| matched cache key | \`${{ steps.ccache.outputs.cache-matched-key }}\` |"
+            echo "| uncompressed | $(du -sh /builder/openwrt/.ccache | cut -f1) |"
+            echo "| asset | \`${tarball}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Publish as a release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.release_tag }}
+          TARBALL: /tmp/${{ steps.pack.outputs.tarball }}
+        run: |
+          # gh is preinstalled on the runner and needs no third-party action; release
+          # assets also survive far longer than the workflow artifacts (90 days).
+          gh release view "${TAG}" >/dev/null 2>&1 ||
+            gh release create "${TAG}" \
+              --title "ccache snapshots" \
+              --notes "ccache snapshots exported from the Actions cache of this repository."
+          gh release upload "${TAG}" "${TARBALL}" --clobber
+          echo "download: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${TARBALL}")"
