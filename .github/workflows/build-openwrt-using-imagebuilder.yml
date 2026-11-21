@@ -18,7 +18,7 @@ on:
         default: "immortalwrt:25.12.2"
         type: choice
         options:
-          - openwrt:25.12.5
+          - openwrt:25.12.6
           - openwrt:24.10.8
           - immortalwrt:25.12.2
           - immortalwrt:24.10.6
@@ -277,6 +277,7 @@ on:
           - x98h-100mb
           - xiaobao
           - xingyicloud
+          - ydzy-box
           - youyeetoo-r1-v3
           - youyeetoo-yy3568
           - youyeetoo-yy3588
